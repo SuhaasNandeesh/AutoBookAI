@@ -7,7 +7,6 @@ beautifulsoup4
 requests
 pytest
 faiss-cpu
-tiktoken
-groq
 bubble-client
-openai
+langchain-community
+langchain-google-genai
