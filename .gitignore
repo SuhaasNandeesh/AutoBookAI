@@ -22,6 +22,7 @@ coverage.xml
 # Environment
 .env
 .venv
+google.env
 env.bak
 venv.bak
 
