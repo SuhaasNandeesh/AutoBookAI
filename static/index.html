@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoBook AI</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>AutoBook AI</h1>
+            <p>Your personal scheduling assistant</p>
+        </div>
+        <div class="chat-messages" id="chat-messages">
+            <!-- Messages will be appended here by JavaScript -->
+            <div class="message assistant">
+                <p>Hello! How can I help you schedule your day?</p>
+            </div>
+        </div>
+        <div class="chat-input-form">
+            <form id="chat-form">
+                <input type="text" id="message-input" placeholder="Type your request here..." autocomplete="off" required>
+                <button type="submit">Send</button>
+            </form>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

@@ -7,7 +7,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough, RunnableParallel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
-from dotenv import load_dotenv
 
 def create_retriever(knowledge_base_path="knowledge_base.md"):
     """
@@ -21,8 +20,7 @@ def create_retriever(knowledge_base_path="knowledge_base.md"):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     splits = text_splitter.split_documents(documents)
 
-    # Create the vector store using Google's embeddings
-    # This requires a Google API key (GOOGLE_API_KEY) to be set as an environment variable.
+    # The GOOGLE_API_KEY is expected to be set in the environment by the server.
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     vectorstore = FAISS.from_documents(documents=splits, embedding=embeddings)
 
@@ -35,6 +33,8 @@ def create_rag_chain(retriever):
     """
     Creates a RAG chain for question-answering using a Gemini model.
     """
+    # The GOOGLE_API_KEY is expected to be set in the environment by the server.
+
     # Define the prompt template
     template = """Answer the question based only on the following context:
     {context}
