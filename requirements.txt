@@ -1,0 +1,13 @@
+langchain
+langgraph
+fastapi
+uvicorn
+python-dotenv
+beautifulsoup4
+requests
+pytest
+faiss-cpu
+tiktoken
+groq
+bubble-client
+openai
