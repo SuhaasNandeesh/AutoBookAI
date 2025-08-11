@@ -9,11 +9,12 @@ import sys
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from autobook_ai.main import AgentWorkflow
+from autobook_ai.main import AgentWorkflow, load_user_profile
 
-# Data model for the request body
+# Data model for the request body, now including user_id
 class InvokeRequest(BaseModel):
     user_request: str
+    user_id: str = "default_user" # Default to 'default_user' for now
 
 # A dictionary to hold our long-lived workflow instance
 app_state = {}
@@ -21,9 +22,6 @@ app_state = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- DANGER: HARDCODED API KEY ---
-    # This is a workaround for an issue with creating .env files in this environment.
-    # In a real-world application, NEVER hardcode secrets like this.
-    # Use environment variables or a proper secrets management system.
     API_KEY = "AIzaSyDovZgWFH0wbFZBqMQZblkf71owGh5yFhk"
     os.environ["GOOGLE_API_KEY"] = API_KEY
 
@@ -52,13 +50,21 @@ async def read_root():
 @app.post("/invoke")
 async def invoke_workflow(request: InvokeRequest):
     """
-    Invokes the agent workflow with a user request.
+    Invokes the agent workflow with a user request and user_id.
     """
     workflow = app_state.get("workflow")
     if not workflow:
         return {"error": "Workflow not initialized. The server might be starting up."}, 503
 
-    initial_state = {"user_request": request.user_request}
+    # Load the user profile based on the user_id from the request
+    user_profile = load_user_profile(request.user_id)
+
+    # Set up the initial state for the workflow, now including the user profile
+    initial_state = {
+        "user_request": request.user_request,
+        "user_profile": user_profile
+    }
+
     final_state = workflow.run(initial_state)
 
     return final_state
