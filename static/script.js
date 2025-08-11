@@ -3,59 +3,54 @@ document.addEventListener("DOMContentLoaded", () => {
     const messageInput = document.getElementById("message-input");
     const chatMessages = document.getElementById("chat-messages");
 
-    // --- State Management ---
     let conversationHistory = [];
 
-    // --- Event Listeners ---
     chatForm.addEventListener("submit", async (e) => {
         e.preventDefault();
         const userMessage = messageInput.value.trim();
         if (!userMessage) return;
 
-        // Add user message to UI and history
         addMessageToUI(userMessage, "user");
         conversationHistory.push({ type: "human", content: userMessage });
         messageInput.value = "";
+        messageInput.focus();
 
-        // Show a thinking indicator
-        const thinkingIndicator = addMessageToUI("Thinking...", "assistant", true);
+        const thinkingIndicator = addMessageToUI("...", "assistant", true);
 
-        try {
-            // Send the new message and the entire history to the backend
-            const response = await fetch("/invoke", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    user_request: userMessage,
-                    user_id: "default_user",
-                    conversation_history: conversationHistory.slice(0, -1), // Send history *before* this message
-                }),
-            });
+        const eventSource = new EventSource(`/invoke?messages=${encodeURIComponent(JSON.stringify(conversationHistory))}`);
 
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+        let assistantMessageElement = thinkingIndicator;
+        let fullResponse = "";
+
+        eventSource.onmessage = function(event) {
+            assistantMessageElement.classList.remove("thinking");
+            const chunk = JSON.parse(event.data);
+
+            if (chunk.type === "content") {
+                fullResponse += chunk.data;
+                assistantMessageElement.querySelector("p").textContent = fullResponse;
+            } else if (chunk.type === "tool_call") {
+                // You could optionally display tool calls to the user for debugging
+                console.log("Tool call:", chunk.data);
+            } else if (chunk.type === "tool_end") {
+                 console.log("Tool end:", chunk.data);
             }
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        };
 
-            const data = await response.json();
+        eventSource.onerror = function(err) {
+            console.error("EventSource failed:", err);
+            assistantMessageElement.querySelector("p").textContent = "Sorry, an error occurred.";
+            assistantMessageElement.classList.remove("thinking");
+            eventSource.close();
+        };
 
-            // Update the history with the full history from the server
-            conversationHistory = data.conversation_history || conversationHistory;
-
-            // Remove the thinking indicator
-            thinkingIndicator.remove();
-
-            // The 'confirmation' field contains the agent's response for this turn
-            const assistantResponse = data.confirmation || "Sorry, I couldn't process that.";
-            addMessageToUI(assistantResponse, "assistant");
-
-        } catch (error) {
-            console.error("Error invoking workflow:", error);
-            thinkingIndicator.remove();
-            addMessageToUI("Sorry, something went wrong. Please try again.", "assistant");
-        }
+        eventSource.addEventListener('end', function() {
+            conversationHistory.push({ type: "ai", content: fullResponse });
+            eventSource.close();
+        });
     });
 
-    // --- UI Functions ---
     function addMessageToUI(text, sender, isThinking = false) {
         const messageElement = document.createElement("div");
         messageElement.classList.add("message", sender);

@@ -1,185 +1,111 @@
 import os
 import json
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, Dict, Any, List
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langgraph.prebuilt import ToolExecutor
+from typing import TypedDict, Annotated, List, Dict, Any
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
+from operator import itemgetter
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from autobook_ai.rag import create_retriever, create_rag_chain
+from autobook_ai.tools import all_tools
 
-# 1. Evolved AppState for conversational flow
-class AppState(TypedDict):
-    user_request: str
-    user_profile: Dict[str, Any]
-    conversation_history: List[BaseMessage]
-    research_findings: str
-    schedule: str
-    confirmation: str
-    next_action: str
+# 1. Define the state for our agent
+class AgentState(TypedDict):
+    messages: Annotated[List[BaseMessage], itemgetter("messages")]
 
-# 2. Helper function to load user profiles
-def load_user_profile(user_id: str) -> Dict[str, Any]:
-    profile_path = f"user_profiles/{user_id}.json"
-    if not os.path.exists(profile_path):
-        return {}
-    with open(profile_path, 'r') as f:
-        return json.load(f)
-
-# 3. Define the Agentic Workflow as a class
+# 2. Define the Agentic Workflow as a class
 class AgentWorkflow:
     def __init__(self):
-        self.rag_chain = self._setup_rag_chain()
-        self.scheduling_chain = self._setup_scheduling_chain()
-        self.confirmation_chain = self._setup_confirmation_chain()
-        self.routing_chain = self._setup_routing_chain()
-        self.clarification_chain = self._setup_clarification_chain()
+        self.tool_executor = ToolExecutor(all_tools)
+        self.agent = self._setup_agent()
         self.graph = self._setup_graph()
 
-    def _setup_rag_chain(self):
-        retriever = create_retriever()
-        return create_rag_chain(retriever)
+    def _setup_agent(self):
+        """Sets up the main agent that can call tools."""
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are a helpful assistant named AutoBook AI. You have access to tools to help schedule appointments. Your goal is to gather information, and then create a calendar invite. Respond to the user when you have a final confirmation or need more information."),
+            MessagesPlaceholder("messages"),
+        ])
 
-    def _setup_scheduling_chain(self):
-        prompt_template = """Based on the user's request, their profile, and the following research, create a concrete booking proposal.
-        Use the user's profile to inform your suggestions (e.g., mention their preferred city or cuisine).
-        If you have enough information, suggest a specific time and action.
-        If information is missing, state what is needed to proceed.
-
-        User Profile: {user_profile}
-        Conversation History: {conversation_history}
-        User Request: {user_request}
-        Research Findings: {research_findings}
-
-        Proposed Schedule:"""
-        prompt = ChatPromptTemplate.from_template(prompt_template)
         llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
-        return prompt | llm | StrOutputParser()
+        llm_with_tools = llm.bind_tools(all_tools)
 
-    def _setup_confirmation_chain(self):
-        prompt_template = """You are a friendly assistant. Based on the following proposed schedule, write a short, friendly confirmation message for the user.
-        Make it sound final and reassuring.
-
-        Proposed Schedule: {schedule}
-
-        Confirmation Message:"""
-        prompt = ChatPromptTemplate.from_template(prompt_template)
-        llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.1)
-        return prompt | llm | StrOutputParser()
-
-    def _setup_routing_chain(self):
-        prompt_template = """Given the conversation history and research findings, decide the next action.
-        Actions must be one of: SCHEDULE, CLARIFY.
-        - If the findings provide enough information to fulfill the user's request, choose SCHEDULE.
-        - If the findings are ambiguous or insufficient, choose CLARIFY.
-
-        Conversation History: {conversation_history}
-        Research Findings: {research_findings}
-        Next Action:"""
-        prompt = ChatPromptTemplate.from_template(prompt_template)
-        llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
-        return prompt | llm | StrOutputParser()
-
-    def _setup_clarification_chain(self):
-        prompt_template = """Based on the conversation history and ambiguous research, ask a clear, concise question to the user.
-        Conversation History: {conversation_history}
-        Research Findings: {research_findings}
-        Clarifying Question:"""
-        prompt = ChatPromptTemplate.from_template(prompt_template)
-        llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
-        return prompt | llm | StrOutputParser()
+        return prompt | llm_with_tools
 
     def _setup_graph(self):
-        workflow = StateGraph(AppState)
-        workflow.add_node("user_input", self.user_input_agent)
-        workflow.add_node("research", self.research_agent)
-        workflow.add_node("router", self.route_after_research)
-        workflow.add_node("clarify", self.clarification_agent)
-        workflow.add_node("schedule", self.scheduling_agent)
-        workflow.add_node("confirm", self.confirmation_agent)
+        """Sets up the LangGraph workflow for the tool-using agent."""
+        workflow = StateGraph(AgentState)
+        workflow.add_node("agent", self.agent_node)
+        workflow.add_node("tools", self.tool_executor_node)
 
-        workflow.set_entry_point("user_input")
-        workflow.add_edge("user_input", "research")
-        workflow.add_edge("research", "router")
+        workflow.set_entry_point("agent")
 
-        # This is where the conditional logic is implemented
         workflow.add_conditional_edges(
-            "router",
-            self.should_continue,
+            "agent",
+            self.should_call_tools,
             {
-                "CLARIFY": "clarify",
-                "SCHEDULE": "schedule"
+                "tools": "tools",
+                "__end__": END
             }
         )
 
-        workflow.add_edge("clarify", END) # Stop and wait for user's next input
-        workflow.add_edge("schedule", "confirm")
-        workflow.add_edge("confirm", END)
+        workflow.add_edge("tools", "agent")
 
         return workflow.compile()
 
-    def should_continue(self, state: AppState) -> str:
-        """The routing logic for the conditional edge."""
-        return state["next_action"]
+    def should_call_tools(self, state: AgentState) -> str:
+        """Decides whether to call tools or end the conversation."""
+        last_message = state["messages"][-1]
+        if not hasattr(last_message, "tool_calls") or not last_message.tool_calls:
+            return "__end__"
+        return "tools"
 
-    def user_input_agent(self, state: AppState):
-        print("---USER INPUT AGENT---")
-        user_request = state["user_request"]
-        history = state.get("conversation_history", [])
-        history.append(HumanMessage(content=user_request))
-        print(f"User request: {user_request}")
-        return {"conversation_history": history, "user_request": user_request}
+    def agent_node(self, state: AgentState):
+        """The main agent node."""
+        print("---AGENT---")
+        response_message = self.agent.invoke(state)
+        return {"messages": [response_message]}
 
-    def research_agent(self, state: AppState):
-        print("---RESEARCH AGENT---")
-        user_request = state["user_request"]
-        print(f"Performing research for: {user_request}")
-        findings = self.rag_chain.invoke(user_request)
-        print(f"Research findings: {findings}")
-        return {"research_findings": findings}
+    def tool_executor_node(self, state: AgentState):
+        """Executes the tools called by the agent."""
+        print("---TOOL EXECUTOR---")
+        last_message = state["messages"][-1]
+        tool_calls = last_message.tool_calls
 
-    def route_after_research(self, state: AppState):
-        print("---ROUTER---")
-        next_action = self.routing_chain.invoke({
-            "conversation_history": state["conversation_history"],
-            "research_findings": state["research_findings"]
-        }).strip().upper() # Ensure it's uppercase
-        print(f"Next action decided: {next_action}")
-        return {"next_action": next_action}
+        tool_messages = []
+        for tool_call in tool_calls:
+            tool_output = self.tool_executor.invoke(tool_call)
+            tool_messages.append(
+                ToolMessage(content=str(tool_output), tool_call_id=tool_call['id'])
+            )
 
-    def clarification_agent(self, state: AppState):
-        print("---CLARIFICATION AGENT---")
-        clarifying_question = self.clarification_chain.invoke({
-            "conversation_history": state["conversation_history"],
-            "research_findings": state["research_findings"]
-        })
-        print(f"Asking user: {clarifying_question}")
-        history = state["conversation_history"]
-        history.append(AIMessage(content=clarifying_question))
-        return {"conversation_history": history, "confirmation": clarifying_question}
+        print(f"Tool results: {tool_messages}")
+        return {"messages": tool_messages}
 
-    def scheduling_agent(self, state: AppState):
-        print("---SCHEDULING AGENT---")
-        print("Generating schedule with personalization...")
-        schedule = self.scheduling_chain.invoke({
-            "user_profile": state["user_profile"],
-            "conversation_history": state["conversation_history"],
-            "user_request": state["user_request"],
-            "research_findings": state["research_findings"]
-        })
-        print(f"Proposed schedule: {schedule}")
-        return {"schedule": schedule}
+    def run(self, conversation: List[Dict[str, Any]]):
+        # Reconstruct BaseMessage objects from the plain dicts
+        history = []
+        for msg in conversation:
+            if msg.get('type') == 'human':
+                history.append(HumanMessage(content=msg.get('content')))
+            elif msg.get('type') == 'ai':
+                history.append(AIMessage(content=msg.get('content')))
 
-    def confirmation_agent(self, state: AppState):
-        print("---CONFIRMATION AGENT---")
-        print("Generating confirmation...")
-        confirmation = self.confirmation_chain.invoke({"schedule": state["schedule"]})
-        print(f"Confirmation: {confirmation}")
-        history = state["conversation_history"]
-        history.append(AIMessage(content=confirmation))
-        return {"conversation_history": history, "confirmation": confirmation}
+        # astream_events returns a stream of events, we are interested in the 'on_chat_model_stream' events
+        # that contain the chunks of the response. We will yield these chunks as they come in.
+        async def stream_events():
+            async for event in self.graph.astream_events({"messages": history}, version="v1"):
+                kind = event["event"]
+                if kind == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    if chunk.content:
+                        yield f"data: {json.dumps({'type': 'content', 'data': chunk.content})}\n\n"
+                    if chunk.tool_calls:
+                         yield f"data: {json.dumps({'type': 'tool_call', 'data': chunk.tool_calls})}\n\n"
+                elif kind == "on_tool_end":
+                    yield f"data: {json.dumps({'type': 'tool_end', 'data': event['data']['output']})}\n\n"
 
-    def run(self, initial_state: dict):
-        return self.graph.invoke(initial_state)
+
+        return stream_events()
