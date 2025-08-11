@@ -2,8 +2,8 @@ import os
 import json
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolExecutor
-from typing import TypedDict, Annotated, List, Dict, Any
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage
+from typing import TypedDict, Annotated, List
+from langchain_core.messages import BaseMessage, ToolMessage
 from operator import itemgetter
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -25,8 +25,15 @@ class AgentWorkflow:
     def _setup_agent(self):
         """Sets up the main agent that can call tools."""
         prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a helpful assistant named AutoBook AI. You have access to tools to help schedule appointments. Your goal is to gather information, and then create a calendar invite. Respond to the user when you have a final confirmation or need more information."),
-            MessagesPlaceholder("messages"),
+            ("system",
+             "You are a helpful assistant named AutoBook AI. Your goal is to help users schedule appointments. "
+             "To do this, you have access to a set of tools. \n"
+             "1. First, you should always use the `search_knowledge_base` tool to find out information about a service (like hours, policies, etc.).\n"
+             "2. Once you have the information, you can use other tools like `check_calendar_availability`.\n"
+             "3. Finally, once all details are confirmed with the user, you can use the `create_calendar_invite` tool.\n"
+             "Always confirm with the user before taking a final action like creating an invite. "
+             "If you don't have enough information to use a tool, ask the user for it."),
+            MessagesPlaceholder(variable_name="messages"),
         ])
 
         llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
@@ -84,28 +91,19 @@ class AgentWorkflow:
         print(f"Tool results: {tool_messages}")
         return {"messages": tool_messages}
 
-    def run(self, conversation: List[Dict[str, Any]]):
-        # Reconstruct BaseMessage objects from the plain dicts
-        history = []
-        for msg in conversation:
-            if msg.get('type') == 'human':
-                history.append(HumanMessage(content=msg.get('content')))
-            elif msg.get('type') == 'ai':
-                history.append(AIMessage(content=msg.get('content')))
+    async def run(self, messages: list):
+        """Runs the workflow with the given conversation history and streams the response."""
+        # The graph now directly works with the list of BaseMessage objects
+        async for event in self.graph.astream_events({"messages": messages}, version="v2"):
+            kind = event["event"]
+            if kind == "on_chat_model_stream":
+                chunk = event["data"]["chunk"]
+                if chunk.content:
+                    yield f"data: {json.dumps({'type': 'content', 'data': chunk.content})}\n\n"
+            elif kind == "on_tool_start":
+                yield f"data: {json.dumps({'type': 'tool_start', 'name': event['data']['name'], 'input': event['data']['input']})}\n\n"
+            elif kind == "on_tool_end":
+                yield f"data: {json.dumps({'type': 'tool_end', 'data': event['data']['output'], 'name': event['name']})}\n\n"
 
-        # astream_events returns a stream of events, we are interested in the 'on_chat_model_stream' events
-        # that contain the chunks of the response. We will yield these chunks as they come in.
-        async def stream_events():
-            async for event in self.graph.astream_events({"messages": history}, version="v1"):
-                kind = event["event"]
-                if kind == "on_chat_model_stream":
-                    chunk = event["data"]["chunk"]
-                    if chunk.content:
-                        yield f"data: {json.dumps({'type': 'content', 'data': chunk.content})}\n\n"
-                    if chunk.tool_calls:
-                         yield f"data: {json.dumps({'type': 'tool_call', 'data': chunk.tool_calls})}\n\n"
-                elif kind == "on_tool_end":
-                    yield f"data: {json.dumps({'type': 'tool_end', 'data': event['data']['output']})}\n\n"
-
-
-        return stream_events()
+        # Signal the end of the stream
+        yield f"data: {json.dumps({'type': 'end'})}\n\n"

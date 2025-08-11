@@ -12,8 +12,9 @@ from typing import List, Dict, Any
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from autobook_ai.main import AgentWorkflow
+from langchain_core.messages import HumanMessage
 
-# Data model for the request, which is now just the conversation history
+# Data model for the request
 class InvokeRequest(BaseModel):
     messages: List[Dict[str, Any]] = Field(default_factory=list)
 
@@ -46,6 +47,11 @@ async def read_root():
     """Serves the main index.html file."""
     return FileResponse('static/index.html')
 
+async def stream_generator(workflow_run_coroutine):
+    """Generator function to stream the workflow response."""
+    async for chunk in workflow_run_coroutine:
+        yield f"data: {chunk}\n\n"
+
 @app.post("/invoke")
 async def invoke_workflow(request: InvokeRequest):
     """
@@ -55,5 +61,7 @@ async def invoke_workflow(request: InvokeRequest):
     if not workflow:
         return {"error": "Workflow not initialized. The server might be starting up."}, 503
 
-    # The new workflow `run` method takes the conversation history directly
-    return StreamingResponse(workflow.run(request.messages), media_type="text/event-stream")
+    # The workflow's run method is an async generator
+    workflow_coroutine = workflow.run(request.messages)
+
+    return StreamingResponse(stream_generator(workflow_coroutine), media_type="text/event-stream")

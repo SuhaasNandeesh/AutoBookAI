@@ -15,41 +15,72 @@ document.addEventListener("DOMContentLoaded", () => {
         messageInput.value = "";
         messageInput.focus();
 
-        const thinkingIndicator = addMessageToUI("...", "assistant", true);
+        chatForm.querySelector('button').disabled = true;
+        messageInput.disabled = true;
 
-        const eventSource = new EventSource(`/invoke?messages=${encodeURIComponent(JSON.stringify(conversationHistory))}`);
-
-        let assistantMessageElement = thinkingIndicator;
+        const assistantMessageElement = addMessageToUI("...", "assistant", true);
         let fullResponse = "";
 
-        eventSource.onmessage = function(event) {
-            assistantMessageElement.classList.remove("thinking");
-            const chunk = JSON.parse(event.data);
+        try {
+            const response = await fetch("/invoke", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ messages: conversationHistory }),
+            });
 
-            if (chunk.type === "content") {
-                fullResponse += chunk.data;
-                assistantMessageElement.querySelector("p").textContent = fullResponse;
-            } else if (chunk.type === "tool_call") {
-                // You could optionally display tool calls to the user for debugging
-                console.log("Tool call:", chunk.data);
-            } else if (chunk.type === "tool_end") {
-                 console.log("Tool end:", chunk.data);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
             }
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-        };
 
-        eventSource.onerror = function(err) {
-            console.error("EventSource failed:", err);
-            assistantMessageElement.querySelector("p").textContent = "Sorry, an error occurred.";
-            assistantMessageElement.classList.remove("thinking");
-            eventSource.close();
-        };
+            // This is a simplified way to handle the stream.
+            // A more robust implementation would use EventSource or ndjson.
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
 
-        eventSource.addEventListener('end', function() {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const textChunk = decoder.decode(value, { stream: true });
+                // SSE format is "data: {...}\n\n"
+                const jsonChunks = textChunk.split('\n\n').filter(Boolean);
+
+                for (const jsonChunk of jsonChunks) {
+                    if (jsonChunk.startsWith('data: ')) {
+                        const jsonData = jsonChunk.substring(6);
+                        const chunk = JSON.parse(jsonData);
+
+                        assistantMessageElement.classList.remove("thinking");
+
+                        if (chunk.type === "content") {
+                            fullResponse += chunk.data;
+                            assistantMessageElement.querySelector("p").textContent = fullResponse;
+                        } else if (chunk.type === "tool_start") {
+                            addMessageToUI(`Using tool: ${chunk.name} with input ${JSON.stringify(chunk.input)}`, "system");
+                        } else if (chunk.type === "tool_end") {
+                            addMessageToUI(`Tool Result: ${chunk.data}`, "system");
+                        }
+                    }
+                }
+                 chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+
             conversationHistory.push({ type: "ai", content: fullResponse });
-            eventSource.close();
-        });
+
+        } catch (error) {
+            console.error("Error invoking workflow:", error);
+            assistantMessageElement.querySelector("p").textContent = "Sorry, an error occurred.";
+        } finally {
+            assistantMessageElement.classList.remove("thinking");
+            reenableForm();
+        }
     });
+
+    function reenableForm() {
+        chatForm.querySelector('button').disabled = false;
+        messageInput.disabled = false;
+        messageInput.focus();
+    }
 
     function addMessageToUI(text, sender, isThinking = false) {
         const messageElement = document.createElement("div");

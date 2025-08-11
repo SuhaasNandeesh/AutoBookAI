@@ -71,6 +71,16 @@ body {
     border-bottom-left-radius: 4px;
 }
 
+.message.system {
+    background-color: #f0f0f0;
+    color: #666;
+    align-self: center;
+    font-style: italic;
+    font-size: 0.9rem;
+    width: 100%;
+    text-align: center;
+}
+
 .message p {
     margin: 0;
 }
