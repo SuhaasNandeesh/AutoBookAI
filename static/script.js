@@ -3,31 +3,32 @@ document.addEventListener("DOMContentLoaded", () => {
     const messageInput = document.getElementById("message-input");
     const chatMessages = document.getElementById("chat-messages");
 
+    // --- State Management ---
+    let conversationHistory = [];
+
+    // --- Event Listeners ---
     chatForm.addEventListener("submit", async (e) => {
         e.preventDefault();
-
         const userMessage = messageInput.value.trim();
-        if (!userMessage) {
-            return;
-        }
+        if (!userMessage) return;
 
-        // Display user's message
-        addMessage(userMessage, "user");
+        // Add user message to UI and history
+        addMessageToUI(userMessage, "user");
+        conversationHistory.push({ type: "human", content: userMessage });
         messageInput.value = "";
 
         // Show a thinking indicator
-        const thinkingIndicator = addMessage("Thinking...", "assistant", true);
+        const thinkingIndicator = addMessageToUI("Thinking...", "assistant", true);
 
         try {
-            // Send message and user_id to the backend
+            // Send the new message and the entire history to the backend
             const response = await fetch("/invoke", {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     user_request: userMessage,
-                    user_id: "default_user" // Hardcoded for demonstration
+                    user_id: "default_user",
+                    conversation_history: conversationHistory.slice(0, -1), // Send history *before* this message
                 }),
             });
 
@@ -37,21 +38,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const data = await response.json();
 
+            // Update the history with the full history from the server
+            conversationHistory = data.conversation_history || conversationHistory;
+
             // Remove the thinking indicator
             thinkingIndicator.remove();
 
-            // The 'confirmation' field contains the final, user-facing message.
+            // The 'confirmation' field contains the agent's response for this turn
             const assistantResponse = data.confirmation || "Sorry, I couldn't process that.";
-            addMessage(assistantResponse, "assistant");
+            addMessageToUI(assistantResponse, "assistant");
 
         } catch (error) {
             console.error("Error invoking workflow:", error);
             thinkingIndicator.remove();
-            addMessage("Sorry, something went wrong. Please try again.", "assistant");
+            addMessageToUI("Sorry, something went wrong. Please try again.", "assistant");
         }
     });
 
-    function addMessage(text, sender, isThinking = false) {
+    // --- UI Functions ---
+    function addMessageToUI(text, sender, isThinking = false) {
         const messageElement = document.createElement("div");
         messageElement.classList.add("message", sender);
 
@@ -64,7 +69,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         chatMessages.appendChild(messageElement);
-        // Scroll to the bottom
         chatMessages.scrollTop = chatMessages.scrollHeight;
 
         return messageElement;
