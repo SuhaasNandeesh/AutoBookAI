@@ -19,13 +19,16 @@ document.addEventListener("DOMContentLoaded", () => {
         const thinkingIndicator = addMessage("Thinking...", "assistant", true);
 
         try {
-            // Send message to the backend
+            // Send message and user_id to the backend
             const response = await fetch("/invoke", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ user_request: userMessage }),
+                body: JSON.stringify({
+                    user_request: userMessage,
+                    user_id: "default_user" // Hardcoded for demonstration
+                }),
             });
 
             if (!response.ok) {
@@ -34,16 +37,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const data = await response.json();
 
-            // Determine the final response to show
-            // We can show the 'schedule' or 'confirmation' part of the response.
-            // Let's create a summary.
-            const assistantResponse = `Research: ${data.research_findings}\n\nSchedule: ${data.schedule}\n\nConfirmation: ${data.confirmation}`;
-
             // Remove the thinking indicator
             thinkingIndicator.remove();
 
-            // Display assistant's final response
-            addMessage(data.schedule || "Sorry, I couldn't process that.", "assistant");
+            // The 'confirmation' field contains the final, user-facing message.
+            const assistantResponse = data.confirmation || "Sorry, I couldn't process that.";
+            addMessage(assistantResponse, "assistant");
 
         } catch (error) {
             console.error("Error invoking workflow:", error);

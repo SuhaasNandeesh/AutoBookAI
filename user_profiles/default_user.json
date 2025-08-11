@@ -1,0 +1,9 @@
+{
+    "name": "Alex Doe",
+    "home_city": "Metro City",
+    "preferred_cuisine": ["Italian", "Mexican", "Thai"],
+    "dietary_restrictions": "vegetarian",
+    "known_allergies": ["peanuts"],
+    "insurance_provider": "Blue Cross",
+    "preferred_doctor": "Dr. Evelyn Reed"
+}
